@@ -22,6 +22,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "config/all.h"
 #include <vector>
 
+
+#define CR 10
+#define SSRX D5
+#define SSTX D6
+#include <SoftwareSerial.h>
+SoftwareSerial swSer(SSRX,SSTX);
+char content[10] = "";
+uint8_t strPos = 0;
+
 std::vector<void (*)()> _loop_callbacks;
 std::vector<void (*)()> _reload_callbacks;
 
@@ -42,6 +51,63 @@ void espurnaReload() {
         (_reload_callbacks[i])();
     }
 }
+
+// -----------------------------------------------------------------------------
+// LP&ME
+// -----------------------------------------------------------------------------
+
+#define MQTT_TOPIC_LED_PWM "led_pwm"
+#define MQTT_TOPIC_LED_STATUS "led_status"
+
+unsigned char _light_brightness = LIGHT_MAX_BRIGHTNESS;
+
+#if MQTT_SUPPORT
+void _myMQTTCallback(unsigned int type, const char * topic, const char * payload) {
+
+    if (type == MQTT_CONNECT_EVENT) {
+        mqttSubscribe(MQTT_TOPIC_LED_PWM);
+    }
+
+    if (type == MQTT_MESSAGE_EVENT) {
+
+            Serial.print("GOT MESSAGE: ");
+        // Match topic
+        String t = mqttMagnitude((char *) topic);
+
+        // Brightness
+        if (t.equals(MQTT_TOPIC_LED_PWM)) {
+            _light_brightness = constrain(atoi(payload), 0, LIGHT_MAX_BRIGHTNESS);
+            Serial.println(_light_brightness);
+            delay(0);
+            swSer.println(_light_brightness);
+            delay(0);
+            return;
+        }
+    }
+}
+
+void handleLed() {
+    char character;
+
+    while(swSer.available()) {
+        character = swSer.read();
+        content[strPos] = character;
+        if (character == CR) {
+            content[strPos] = '\0';
+        } else {
+            strPos++;
+        }
+        delay(0);
+    }
+    if (character == CR) {
+        mqttSend(MQTT_TOPIC_LED_STATUS, content);
+        delay(0);
+        Serial.println(content);
+        strPos = 0;
+    }
+}
+#endif
+
 
 // -----------------------------------------------------------------------------
 // BOOTING
@@ -199,13 +265,23 @@ void setup() {
 
     saveSettings();
 
+    swSer.begin(9600);
+    pinMode(SSRX,INPUT);
+    pinMode(SSTX,OUTPUT);
+
+    #if MQTT_SUPPORT
+      mqttRegister(_myMQTTCallback);
+    #endif
+
 }
 
 void loop() {
+    #if MQTT_SUPPORT
+      handleLed();
+    #endif
 
     // Call registered loop callbacks
     for (unsigned char i = 0; i < _loop_callbacks.size(); i++) {
         (_loop_callbacks[i])();
     }
-
 }
